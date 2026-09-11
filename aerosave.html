@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AEROSAVE - AI Disaster Rescue Command Center | SIH 2026</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            dark: { bg: '#080c14', card: '#0f172a', border: '#1e293b', accent: '#1e293b' },
+            emergency: { red: '#ef4444', amber: '#f59e0b', green: '#10b981', blue: '#3b82f6', cyan: '#06b6d4' }
+          },
+          animation: {
+            'radar': 'radarSweep 4s linear infinite',
+            'pulse-fast': 'pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite'
+          },
+          keyframes: {
+            radarSweep: { '0%': { transform: 'rotate(0deg)' }, '100%': { transform: 'rotate(360deg)' } }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- React 18, React DOM & Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Leaflet CSS & JS (OpenStreetMap) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body { background-color: #080c14; color: #f8fafc; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; overflow-x: hidden; }
+    .glass-panel { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .glass-panel-danger { background: rgba(239, 68, 68, 0.15); backdrop-filter: blur(16px); border: 1px solid rgba(239, 68, 68, 0.4); }
+    .leaflet-container { background-color: #0b1120 !important; font-family: inherit; }
+    .leaflet-popup-content-wrapper { background: #0f172a !important; color: #f8fafc !important; border: 1px solid #334155; border-radius: 10px; }
+    .leaflet-popup-tip { background: #0f172a !important; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #080c14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // Initial Telemetry & Victim Data
+    const INITIAL_VICTIMS = [
+      { id: 'VIC-001', photoUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=180&auto=format&fit=crop&q=80', confidence: 96.4, priority: 'CRITICAL', lat: 28.6145, lng: 77.2095, location: 'Sector 4 Roof Top - Flood Zone 1', detectedAt: '11:14:22 AM', aidStatus: 'AVAILABLE', rescueStatus: 'DETECTED', temp: '36.8°C', notes: 'Submerged structure, signaling for urgent help.' },
+      { id: 'VIC-002', photoUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=180&auto=format&fit=crop&q=80', confidence: 89.2, priority: 'HIGH', lat: 28.6128, lng: 77.2080, location: 'Tree Branch Over River Bank', detectedAt: '11:18:05 AM', aidStatus: 'DELIVERED', rescueStatus: 'RESCUE_PENDING', temp: '36.2°C', notes: 'First aid kit successfully dropped via Pixhawk servo.' },
+      { id: 'VIC-003', photoUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=180&auto=format&fit=crop&q=80', confidence: 91.8, priority: 'MEDIUM', lat: 28.6152, lng: 77.2110, location: 'Dry Ground Patch near Bridge', detectedAt: '11:22:40 AM', aidStatus: 'AVAILABLE', rescueStatus: 'DETECTED', temp: '37.1°C', notes: 'Multiple individuals stranded near collapsed embankment.' }
+    ];
+
+    function App() {
+      const [page, setPage] = useState('landing');
+      const [telemetry, setTelemetry] = useState({
+        status: 'ONLINE', battery: 88, voltage: 15.8, sats: 14, lat: 28.6139, lng: 77.2090, alt: 35.4, speed: 6.2, heading: 45, rssi: 96, flightTime: 432
+      });
+      const [victims, setVictims] = useState(INITIAL_VICTIMS);
+      const [activeAlert, setActiveAlert] = useState(null);
+      const [servoAngle, setServoAngle] = useState(0);
+      const [isDemoRunning, setIsDemoRunning] = useState(false);
+      const [demoStepMsg, setDemoStepMsg] = useState('');
+
+      // Live Telemetry simulation clock
+      useEffect(() => {
+        const timer = setInterval(() => {
+          setTelemetry(prev => ({
+            ...prev,
+            flightTime: prev.flightTime + 1,
+            heading: (prev.heading + 2) % 360,
+            battery: Math.max(12, prev.battery - (Math.random() < 0.05 ? 1 : 0))
+          }));
+        }, 1000);
+        return () => clearInterval(timer);
+      }, []);
+
+      // SIH Automated Demo Workflow
+      const triggerSIHDemo = () => {
+        setPage('dashboard');
+        setIsDemoRunning(true);
+        setDemoStepMsg('STEP 1: Autonomous Search Grid Mission Init...');
+
+        setTimeout(() => setDemoStepMsg('STEP 2: Scanning Sector 2 Flood Area with YOLOv8 Neural Camera...'), 2000);
+        
+        setTimeout(() => {
+          setDemoStepMsg('STEP 3: 🎯 HUMAN DETECTED (97.4% Confidence)! Assigning CRITICAL Priority...');
+          const newVictim = {
+            id: `VIC-00${victims.length + 1}`,
+            photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=180&auto=format&fit=crop&q=80',
+            confidence: 97.4,
+            priority: 'CRITICAL',
+            lat: 28.6142,
+            lng: 77.2102,
+            location: 'Collapsed Building Roof - Sector 2',
+            detectedAt: new Date().toLocaleTimeString(),
+            aidStatus: 'AVAILABLE',
+            rescueStatus: 'DETECTED',
+            temp: '36.5°C',
+            notes: 'AI bounding box verified 97.4%. Urgent rescue required.'
+          };
+          setVictims(prev => [newVictim, ...prev]);
+          setActiveAlert(newVictim);
+        }, 4000);
+
+        setTimeout(() => {
+          setDemoStepMsg('STEP 4: Activating Audio Broadcast ("Madad aa rahi hai!")...');
+        }, 7000);
+
+        setTimeout(() => {
+          setDemoStepMsg('STEP 5: Rotating Pixhawk Servo Payload Mechanism to 90°...');
+          setServoAngle(90);
+        }, 9000);
+
+        setTimeout(() => {
+          setDemoStepMsg('STEP 6: First-Aid Kit Dropped Successfully! Dispatching Rescue Team...');
+          setServoAngle(0);
+          setIsDemoRunning(false);
+        }, 12000);
+      };
+
+      const handleAidDrop = (victimId) => {
+        setServoAngle(90);
+        setVictims(prev => prev.map(v => v.id === victimId ? { ...v, aidStatus: 'DELIVERED', rescueStatus: 'RESCUE_PENDING' } : v));
+        setTimeout(() => setServoAngle(0), 2500);
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col font-sans">
+          {/* Top Header */}
+          <header className="bg-dark-card border-b border-dark-border px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-2xl">
+            <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setPage('landing')}>
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-red-600 via-amber-500 to-red-600 flex items-center justify-center font-black text-white text-lg shadow-lg shadow-red-900/50 animate-pulse">
+                AS
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="font-extrabold text-xl tracking-wider text-white">AEROSAVE</span>
+                  <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-red-950/80 text-red-400 border border-red-800 font-mono font-bold">SIH 2026 HARDWARE</span>
+                </div>
+                <p className="text-[11px] text-gray-400">AI Autonomous Search & Rescue Drone</p>
+              </div>
+            </div>
+
+            {/* Live Telemetry Bar */}
+            <div className="hidden lg:flex items-center space-x-6 bg-dark-bg/90 border border-dark-border px-5 py-1.5 rounded-full text-xs font-mono">
+              <span className="text-emerald-400 font-bold flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span> ONLINE
+              </span>
+              <span className="text-gray-300">BATTERY: <strong className="text-emerald-400">{telemetry.battery}%</strong> ({telemetry.voltage}V)</span>
+              <span className="text-gray-300">GPS: <strong className="text-blue-400">{telemetry.sats} SATS</strong></span>
+              <span className="text-amber-400">ALT: <strong>{telemetry.alt}m</strong> | SPD: <strong>{telemetry.speed}m/s</strong></span>
+              <span className="text-purple-400">RSSI: <strong>{telemetry.rssi}%</strong></span>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center space-x-3">
+              <button onClick={triggerSIHDemo} className="bg-gradient-to-r from-amber-500 via-red-600 to-amber-600 hover:from-amber-600 hover:to-red-700 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg transition transform hover:scale-105 flex items-center gap-2">
+                <span>▶ SIH JUDGE DEMO MODE</span>
+              </button>
+              {page !== 'dashboard' && (
+                <button onClick={() => setPage('dashboard')} className="bg-slate-800 hover:bg-slate-700 text-gray-200 text-xs px-3.5 py-2.5 rounded-xl border border-slate-700 font-semibold">
+                  Command Center
+                </button>
+              )}
+            </div>
+          </header>
+
+          {/* Demo Step Banner */}
+          {isDemoRunning && (
+            <div className="bg-gradient-to-r from-amber-900/90 via-red-900/90 to-amber-900/90 border-b border-amber-500/50 px-6 py-2 text-center text-xs font-mono text-amber-200 font-bold animate-pulse">
+              ⚡ SIH PRESENTATION MODE: {demoStepMsg}
+            </div>
+          )}
+
+          {/* Sub Navigation Bar */}
+          {page !== 'landing' && (
+            <nav className="bg-dark-bg border-b border-dark-border px-6 py-2.5 flex space-x-2 text-xs overflow-x-auto font-medium">
+              {[
+                { id: 'dashboard', label: 'Main Command Center' },
+                { id: 'ai', label: 'AI Detection Panel' },
+                { id: 'victims', label: 'Victim Management' },
+                { id: 'map', label: 'Disaster Multi-Map' },
+                { id: 'monitoring', label: 'Drone Telemetry' },
+                { id: 'servo', label: 'First-Aid Servo Drop' },
+                { id: 'voice', label: 'Voice Intercom' },
+                { id: 'analytics', label: 'Mission Reports' },
+                { id: 'architecture', label: 'System Architecture' }
+              ].map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => setPage(item.id)}
+                  className={`px-3.5 py-1.5 rounded-lg whitespace-nowrap transition-all ${page === item.id ? 'bg-red-600/20 text-red-400 border border-red-500/40 font-bold' : 'text-gray-400 hover:text-gray-200 hover:bg-slate-800/50'}`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+          )}
+
+          {/* Main Content Area */}
+          <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full">
+            {page === 'landing' && <LandingView onLaunch={() => setPage('dashboard')} onDemo={triggerSIHDemo} />}
+            {page === 'dashboard' && <DashboardView telemetry={telemetry} victims={victims} onSelectVictim={setActiveAlert} />}
+            {page === 'ai' && <AIDetectionView victims={victims} onSimulate={triggerSIHDemo} />}
+            {page === 'victims' && <VictimView victims={victims} onDropAid={handleAidDrop} />}
+            {page === 'map' && <DisasterMapView telemetry={telemetry} victims={victims} />}
+            {page === 'monitoring' && <DroneMonitoringView telemetry={telemetry} />}
+            {page === 'servo' && <ServoDeliveryView victims={victims} servoAngle={servoAngle} onDrop={handleAidDrop} />}
+            {page === 'voice' && <VoiceAssistanceView />}
+            {page === 'analytics' && <AnalyticsView victims={victims} telemetry={telemetry} />}
+            {page === 'architecture' && <ArchitectureView />}
+          </main>
+
+          {/* Emergency Alert Modal */}
+          {activeAlert && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
+              <div className="glass-panel-danger max-w-lg w-full rounded-2xl p-6 space-y-4 shadow-2xl border border-red-500/60">
+                <div className="flex items-center space-x-3 text-red-400">
+                  <span className="text-4xl animate-bounce">⚠️</span>
+                  <div>
+                    <h2 className="text-2xl font-black uppercase tracking-wider">CRITICAL VICTIM DETECTED</h2>
+                    <p className="text-xs font-mono text-red-300">YOLOv8 AI CONFIDENCE: {activeAlert.confidence}%</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-4 bg-dark-bg p-4 rounded-xl border border-red-900/40">
+                  <img src={activeAlert.photoUrl} className="w-20 h-20 rounded-xl object-cover border border-amber-500" />
+                  <div className="space-y-1 text-xs font-mono">
+                    <div className="text-white font-bold">{activeAlert.id}</div>
+                    <div className="text-amber-400">{activeAlert.location}</div>
+                    <div className="text-emerald-400">GPS: {activeAlert.lat.toFixed(4)}, {activeAlert.lng.toFixed(4)}</div>
+                    <div className="text-gray-400">BODY TEMP: {activeAlert.temp}</div>
+                  </div>
+                </div>
+
+                <div className="flex space-x-3">
+                  <button onClick={() => { handleAidDrop(activeAlert.id); setActiveAlert(null); }} className="flex-1 bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-700 hover:to-amber-700 text-white font-black text-xs py-3.5 rounded-xl shadow-lg">
+                    DISPATCH SERVO FIRST-AID DROP
+                  </button>
+                  <button onClick={() => setActiveAlert(null)} className="bg-slate-800 hover:bg-slate-700 text-gray-300 text-xs px-5 py-3.5 rounded-xl border border-slate-700 font-semibold">
+                    Acknowledge
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // LANDING VIEW
+    function LandingView({ onLaunch, onDemo }) {
+      return (
+        <div className="py-10 space-y-16 text-center">
+          <div className="space-y-6">
+            <span className="bg-red-950/80 text-red-400 border border-red-800 text-xs font-mono px-4 py-1.5 rounded-full font-bold">SMART INDIA HACKATHON 2026 HARDWARE PROJECT</span>
+            <h1 className="text-6xl md:text-8xl font-black text-white tracking-tight">AEROSAVE</h1>
+            <p className="text-2xl md:text-3xl text-amber-400 font-extrabold max-w-2xl mx-auto">AI-Powered Autonomous Search & Rescue Drone</p>
+            <p className="text-gray-400 text-sm max-w-3xl mx-auto leading-relaxed">
+              Designed for disaster management in flood, earthquake, and landslide scenarios. Scans disaster areas using YOLOv8 AI camera, detects trapped victims, enables 2-way audio communication, and drops immediate first-aid kits via Pixhawk servo payload mechanics.
+            </p>
+
+            <div className="flex justify-center gap-4 pt-4">
+              <button onClick={onLaunch} className="bg-red-600 hover:bg-red-700 text-white font-black text-sm px-8 py-4 rounded-2xl shadow-xl transition transform hover:scale-105">
+                LAUNCH COMMAND CENTER →
+              </button>
+              <button onClick={onDemo} className="bg-slate-800 hover:bg-slate-700 text-gray-200 font-bold text-sm px-6 py-4 rounded-2xl border border-slate-700">
+                ▶ VIEW SIH MISSION DEMO
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
+            <div className="glass-panel p-6 rounded-2xl space-y-3 border-emerald-500/20">
+              <div className="text-3xl">🧠</div>
+              <h3 className="font-bold text-white text-base">AI Human Detection</h3>
+              <p className="text-xs text-gray-400">YOLOv8 neural network running real-time on Android SBC companion computer connected to Pixhawk 2.4.8.</p>
+            </div>
+            <div className="glass-panel p-6 rounded-2xl space-y-3 border-amber-500/20">
+              <div className="text-3xl">📦</div>
+              <h3 className="font-bold text-white text-base">First-Aid Servo Payload</h3>
+              <p className="text-xs text-gray-400">Servo-controlled drop mechanism connected to Pixhawk PWM channel for accurate kit delivery.</p>
+            </div>
+            <div className="glass-panel p-6 rounded-2xl space-y-3 border-blue-500/20">
+              <div className="text-3xl">📢</div>
+              <h3 className="font-bold text-white text-base">Offline Intercom & GPS</h3>
+              <p className="text-xs text-gray-400">Speaker & microphone broadcast *"Madad aa rahi hai"* with low-latency 433MHz radio telemetry.</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // MAIN DASHBOARD VIEW WITH REAL LEAFLET MAP
+    function DashboardView({ telemetry, victims, onSelectVictim }) {
+      const mapContainerRef = useRef(null);
+      const mapInstanceRef = useRef(null);
+
+      useEffect(() => {
+        if (!mapContainerRef.current) return;
+
+        if (!mapInstanceRef.current) {
+          const map = L.map(mapContainerRef.current).setView([28.6139, 77.2090], 15);
+          
+          L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors © CARTO'
+          }).addTo(map);
+
+          // Add Flood Hazard Polygon
+          const floodPolygon = L.polygon([
+            [28.6160, 77.2070],
+            [28.6170, 77.2120],
+            [28.6120, 77.2130],
+            [28.6110, 77.2080]
+          ], { color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.25 }).addTo(map);
+          floodPolygon.bindTooltip("SECTOR 4 FLOOD INUNDATION ZONE");
+
+          // Add Drone Marker
+          const droneIcon = L.divIcon({
+            html: '<div style="background:#ef4444; width:16px; height:16px; border-radius:50%; border:3px solid white; box-shadow: 0 0 12px #ef4444;"></div>',
+            className: ''
+          });
+          L.marker([telemetry.lat, telemetry.lng], { icon: droneIcon }).addTo(map).bindPopup("<b>AEROSAVE DRONE</b><br>Alt: 35.4m | Speed: 6.2m/s");
+
+          // Add Victim Markers
+          victims.forEach(v => {
+            const vIcon = L.divIcon({
+              html: `<div style="background:#f59e0b; width:12px; height:12px; border-radius:50%; border:2px solid white;"></div>`,
+              className: ''
+            });
+            L.marker([v.lat, v.lng], { icon: vIcon }).addTo(map).bindPopup(`<b>${v.id}</b><br>${v.location}<br>Priority: ${v.priority}`);
+          });
+
+          mapInstanceRef.current = map;
+        }
+      }, [victims]);
+
+      return (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="glass-panel p-4 rounded-2xl flex items-center space-x-3">
+              <div className="p-3 bg-emerald-950/60 rounded-xl text-emerald-400 border border-emerald-800/40 text-xl font-bold">🔋</div>
+              <div>
+                <p className="text-[10px] text-gray-400 font-mono">BATTERY STATUS</p>
+                <p className="text-xl font-bold text-emerald-400">{telemetry.battery}%</p>
+                <p className="text-[10px] text-gray-500 font-mono">{telemetry.voltage}V LiPo (4S)</p>
+              </div>
+            </div>
+
+            <div className="glass-panel p-4 rounded-2xl flex items-center space-x-3">
+              <div className="p-3 bg-blue-950/60 rounded-xl text-blue-400 border border-blue-800/40 text-xl font-bold">🛰️</div>
+              <div>
+                <p className="text-[10px] text-gray-400 font-mono">ALTITUDE & SPEED</p>
+                <p className="text-xl font-bold text-blue-400">{telemetry.alt}m</p>
+                <p className="text-[10px] text-gray-500 font-mono">{telemetry.speed} m/s Speed</p>
+              </div>
+            </div>
+
+            <div className="glass-panel p-4 rounded-2xl flex items-center space-x-3">
+              <div className="p-3 bg-amber-950/60 rounded-xl text-amber-400 border border-amber-800/40 text-xl font-bold">🎯</div>
+              <div>
+                <p className="text-[10px] text-gray-400 font-mono">VICTIMS DETECTED</p>
+                <p className="text-xl font-bold text-amber-400">{victims.length}</p>
+                <p className="text-[10px] text-red-400 font-mono font-bold">1 CRITICAL PRIORITY</p>
+              </div>
+            </div>
+
+            <div className="glass-panel p-4 rounded-2xl flex items-center space-x-3">
+              <div className="p-3 bg-purple-950/60 rounded-xl text-purple-400 border border-purple-800/40 text-xl font-bold">📡</div>
+              <div>
+                <p className="text-[10px] text-gray-400 font-mono">TELEMETRY RSSI</p>
+                <p className="text-xl font-bold text-purple-400">{telemetry.rssi}%</p>
+                <p className="text-[10px] text-gray-500 font-mono">433MHz Radio</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 glass-panel p-4 rounded-2xl h-[450px] flex flex-col justify-between relative overflow-hidden">
+              <div className="flex justify-between items-center z-10 font-mono text-xs">
+                <span className="font-bold text-gray-300">LIVE OPENSTREETMAP TACTICAL SEARCH GRID</span>
+                <span className="bg-red-950 text-red-400 px-2.5 py-0.5 rounded border border-red-800">SECTOR 4 FLOOD ZONE</span>
+              </div>
+
+              {/* Leaflet Map Div */}
+              <div ref={mapContainerRef} className="w-full h-full my-2 rounded-xl border border-slate-800 z-0"></div>
+
+              <div className="z-10 text-[10px] text-gray-400 font-mono bg-black/80 p-2 rounded-lg border border-slate-800 flex justify-between">
+                <span>DRONE: 28.6139° N, 77.2090° E</span>
+                <span>HEADING: {telemetry.heading}°</span>
+              </div>
+            </div>
+
+            <div className="glass-panel p-5 rounded-2xl space-y-4">
+              <h3 className="text-xs font-bold text-gray-400 font-mono uppercase border-b border-slate-800 pb-2">VICTIM INSPECTOR</h3>
+              {victims[0] && (
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-3">
+                    <img src={victims[0].photoUrl} className="w-16 h-16 rounded-xl object-cover border border-amber-500" />
+                    <div>
+                      <span className="text-xs font-mono text-red-400 font-bold">{victims[0].id}</span>
+                      <h4 className="text-xs font-bold text-white">{victims[0].location}</h4>
+                      <span className="text-[9px] bg-red-950 text-red-400 px-2 py-0.5 rounded font-mono font-bold">PRIORITY: {victims[0].priority}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs text-gray-300 font-mono bg-dark-bg p-3 rounded-xl border border-slate-800">
+                    <div className="flex justify-between"><span className="text-gray-500">AI Confidence:</span><span className="text-emerald-400 font-bold">{victims[0].confidence}%</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">First-Aid Status:</span><span className="text-amber-400">{victims[0].aidStatus}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">Rescue Status:</span><span className="text-blue-400">{victims[0].rescueStatus}</span></div>
+                  </div>
+
+                  <button onClick={() => onSelectVictim(victims[0])} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold text-xs py-3 rounded-xl shadow-lg">
+                    TRIGGER EMERGENCY ALERT
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // AI DETECTION VIEW
+    function AIDetectionView({ victims, onSimulate }) {
+      return (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-xl font-bold text-white">YOLOv8 AI Detection Stream</h2>
+              <p className="text-xs text-gray-400 font-mono">Neural Bounding Box & Target Geo-Tagging</p>
+            </div>
+            <button onClick={onSimulate} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow">
+              + SIMULATE DETECTION
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 glass-panel p-4 rounded-2xl relative h-[400px] bg-black overflow-hidden flex flex-col justify-between border border-emerald-500/40">
+              <div className="flex justify-between items-center z-10 font-mono text-xs">
+                <span className="bg-red-950 text-red-400 px-2.5 py-0.5 rounded border border-red-800">● LIVE AI STREAM</span>
+                <span className="text-emerald-400">FPS: 30.2 | YOLOv8-Rescue</span>
+              </div>
+
+              {/* Bounding Box Visual */}
+              <div className="absolute top-24 left-1/3 w-52 h-52 border-2 border-emerald-400 rounded-lg bg-emerald-500/10 flex flex-col justify-between p-2 animate-pulse z-10">
+                <span className="bg-emerald-500 text-black text-[10px] font-bold font-mono px-1.5 py-0.5 rounded w-max">HUMAN DETECTED (96.4%)</span>
+                <span className="text-[9px] font-mono text-emerald-300">BBOX: [142, 88, 210, 340]</span>
+              </div>
+
+              <img src="https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=800&auto=format&fit=crop&q=80" className="absolute inset-0 w-full h-full object-cover opacity-40" />
+
+              <div className="z-10 text-[10px] text-gray-400 font-mono bg-black/80 p-2 rounded-lg flex justify-between">
+                <span>LAT: 28.6145° N | LNG: 77.2095° E</span>
+                <span>CLASS: PERSON | CONFIDENCE: 96.4%</span>
+              </div>
+            </div>
+
+            <div className="glass-panel p-4 rounded-2xl space-y-3">
+              <h3 className="text-xs font-bold text-gray-400 font-mono uppercase">DETECTION LOG FEED</h3>
+              {victims.map(v => (
+                <div key={v.id} className="bg-dark-bg p-3.5 rounded-xl border border-slate-800 space-y-1 text-xs font-mono">
+                  <div className="flex justify-between"><span className="text-white font-bold">{v.id}</span><span className="text-emerald-400">{v.confidence}%</span></div>
+                  <p className="text-[10px] text-gray-400">{v.location}</p>
+                  <p className="text-[9px] text-amber-400">{v.detectedAt}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // VICTIM VIEW
+    function VictimView({ victims, onDropAid }) {
+      return (
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold text-white">Victim Management & Dispatch Table</h2>
+          <div className="glass-panel rounded-2xl overflow-hidden border border-slate-800">
+            <table className="w-full text-left text-xs font-mono">
+              <thead className="bg-dark-card text-gray-400 uppercase text-[10px] border-b border-slate-800">
+                <tr>
+                  <th className="p-3.5">Victim ID</th>
+                  <th className="p-3.5">Priority</th>
+                  <th className="p-3.5">AI Confidence</th>
+                  <th className="p-3.5">Location</th>
+                  <th className="p-3.5">First-Aid Status</th>
+                  <th className="p-3.5">Rescue Status</th>
+                  <th className="p-3.5">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {victims.map(v => (
+                  <tr key={v.id} className="hover:bg-slate-800/40">
+                    <td className="p-3.5 font-bold text-white">{v.id}</td>
+                    <td className="p-3.5"><span className="bg-red-950 text-red-400 border border-red-800 px-2.5 py-0.5 rounded text-[10px] font-bold">{v.priority}</span></td>
+                    <td className="p-3.5 text-emerald-400 font-bold">{v.confidence}%</td>
+                    <td className="p-3.5 text-gray-300">{v.location}</td>
+                    <td className="p-3.5 text-amber-400">{v.aidStatus}</td>
+                    <td className="p-3.5 text-blue-400">{v.rescueStatus}</td>
+                    <td className="p-3.5">
+                      <button onClick={() => onDropAid(v.id)} className="bg-red-600 hover:bg-red-700 text-white font-bold text-[10px] px-3.5 py-1.5 rounded-lg shadow">
+                        Drop Aid Kit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    // DISASTER MAP VIEW
+    function DisasterMapView({ telemetry, victims }) {
+      return (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-bold text-white">Disaster Multi-Layer OpenStreetMap</h2>
+            <div className="flex gap-2 text-xs font-mono">
+              <span className="bg-blue-950 text-blue-400 border border-blue-800 px-3 py-1 rounded-full">🌊 Flood Layer</span>
+              <span className="bg-red-950 text-red-400 border border-red-800 px-3 py-1 rounded-full">🔥 Fire Layer</span>
+              <span className="bg-amber-950 text-amber-400 border border-amber-800 px-3 py-1 rounded-full">⚠️ Unsafe Grid</span>
+            </div>
+          </div>
+          <div className="glass-panel p-4 rounded-2xl h-[450px] relative flex flex-col justify-between">
+            <div className="z-10 text-xs font-mono text-gray-300">SEARCH GRID SECTOR 4 OVERLAY</div>
+            <div className="my-auto text-center text-xs text-gray-500 font-mono">[Leaflet tile stream loaded. 3 Active Victim Pins mapped.]</div>
+            <div className="z-10 text-[10px] text-gray-400 font-mono bg-black/80 p-2.5 rounded-xl border border-slate-800 flex justify-between">
+              <span>ACTIVE VICTIMS: {victims.length}</span>
+              <span>SEARCH AREA: 14.2 km²</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // DRONE MONITORING VIEW
+    function DroneMonitoringView({ telemetry }) {
+      return (
+        <div className="space-y-6">
+          <h2 className="text-xl font-bold text-white">Pixhawk 2.4.8 Telemetry Diagnostics</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="glass-panel p-6 rounded-2xl space-y-2">
+              <p className="text-xs text-gray-400 font-mono">HEADING COMPASS</p>
+              <p className="text-4xl font-black text-amber-400">{telemetry.heading}°</p>
+              <p className="text-xs text-gray-500 font-mono">MAG_ONLINE Fix</p>
+            </div>
+            <div className="glass-panel p-6 rounded-2xl space-y-2">
+              <p className="text-xs text-gray-400 font-mono">FLIGHT MODE</p>
+              <p className="text-4xl font-black text-emerald-400">AUTO SEARCH</p>
+              <p className="text-xs text-gray-500 font-mono">PX4 Autopilot Stack</p>
+            </div>
+            <div className="glass-panel p-6 rounded-2xl space-y-2">
+              <p className="text-xs text-gray-400 font-mono">GPS SATELLITES</p>
+              <p className="text-4xl font-black text-blue-400">{telemetry.sats} SATS</p>
+              <p className="text-xs text-gray-500 font-mono">Neo-M8N Dual Compass</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // SERVO DELIVERY VIEW
+    function ServoDeliveryView({ victims, servoAngle, onDrop }) {
+      return (
+        <div className="space-y-6">
+          <h2 className="text-xl font-bold text-white">First-Aid Kit Servo Payload Mechanism</h2>
+          <div className="glass-panel p-8 rounded-2xl space-y-6 text-center">
+            <div className="p-8 bg-dark-bg rounded-2xl border border-slate-800 max-w-md mx-auto space-y-4 shadow-xl">
+              <div className="text-xs text-gray-400 font-mono">SERVO ARM ROTATION ANGLE</div>
+              <div className="text-6xl font-black text-amber-400 font-mono">{servoAngle}°</div>
+              <div className="w-full bg-slate-800 h-4 rounded-full overflow-hidden">
+                <div className="bg-amber-500 h-full transition-all duration-500" style={{ width: `${(servoAngle/90)*100}%` }}></div>
+              </div>
+              <p className="text-xs text-emerald-400 font-mono font-bold">STATUS: {servoAngle === 90 ? 'PAYLOAD RELEASED' : 'SERVO LOCKED / READY'}</p>
+            </div>
+
+            {victims[0] && (
+              <button onClick={() => onDrop(victims[0].id)} className="bg-red-600 hover:bg-red-700 text-white font-black text-xs px-8 py-3.5 rounded-xl shadow-lg">
+                TEST SERVO RELEASE FOR {victims[0].id}
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // VOICE ASSISTANCE VIEW
+    function VoiceAssistanceView() {
+      return (
+        <div className="space-y-6">
+          <h2 className="text-xl font-bold text-white">Voice Assistance & Audio Intercom</h2>
+          <div className="glass-panel p-6 rounded-2xl space-y-6">
+            <div className="bg-red-950/40 p-6 rounded-2xl border border-red-800/60 text-center space-y-2">
+              <p className="text-xs text-red-300 font-mono">SPEAKER BROADCASTING AUTOMATED MESSAGE</p>
+              <h3 className="text-3xl font-black text-white">"Madad aa rahi hai! Stay calm."</h3>
+            </div>
+
+            <div className="bg-dark-bg p-6 rounded-2xl border border-slate-800 space-y-4">
+              <p className="text-xs text-gray-400 font-mono">DIRECTIONAL MIC ACOUSTIC DETECTOR</p>
+              <div className="flex items-center space-x-1.5 h-16 justify-center">
+                {[40,70,30,90,60,100,50,80,30,60,90,40,70,50,85].map((h, i) => (
+                  <div key={i} className="w-2.5 bg-emerald-500 rounded-full animate-pulse" style={{ height: `${h}%` }}></div>
+                ))}
+              </div>
+              <p className="text-center text-xs text-emerald-400 font-mono font-bold">KEYWORD DETECTED: "HELP" (Confidence: 91.2%)</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ANALYTICS VIEW
+    function AnalyticsView({ victims, telemetry }) {
+      return (
+        <div className="space-y-6">
+          <h2 className="text-xl font-bold text-white">Mission Analytics & Post-Operation Report</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="glass-panel p-4 rounded-2xl"><p className="text-xs text-gray-400 font-mono">SEARCHED AREA</p><p className="text-2xl font-bold text-white">14.2 km²</p></div>
+            <div className="glass-panel p-4 rounded-2xl"><p className="text-xs text-gray-400 font-mono">VICTIMS DETECTED</p><p className="text-2xl font-bold text-amber-400">{victims.length}</p></div>
+            <div className="glass-panel p-4 rounded-2xl"><p className="text-xs text-gray-400 font-mono">AID KITS DROPPED</p><p className="text-2xl font-bold text-emerald-400">1</p></div>
+            <div className="glass-panel p-4 rounded-2xl"><p className="text-xs text-gray-400 font-mono">MISSION DURATION</p><p className="text-2xl font-bold text-blue-400">{Math.floor(telemetry.flightTime/60)}m {telemetry.flightTime%60}s</p></div>
+          </div>
+        </div>
+      );
+    }
+
+    // ARCHITECTURE VIEW
+    function ArchitectureView() {
+      return (
+        <div className="space-y-6">
+          <h2 className="text-xl font-bold text-white">System Architecture & Hardware Specifications</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="glass-panel p-6 rounded-2xl space-y-3 border-amber-500/20">
+              <h3 className="font-bold text-amber-400 text-sm font-mono border-b border-slate-800 pb-2">HARDWARE BILL OF MATERIALS (BOM)</h3>
+              <ul className="text-xs text-gray-300 font-mono space-y-2">
+                <li>• Frame: F450 Quadcopter Drone Frame</li>
+                <li>• Flight Controller: Pixhawk 2.4.8 (PX4 / ArduPilot)</li>
+                <li>• AI Companion: Android SBC / Companion Phone</li>
+                <li>• AI Camera: 1080p HD Wide-Angle Lens</li>
+                <li>• GPS: U-Blox Neo-M8N Dual Compass GPS</li>
+                <li>• Servo: High-Torque PWM Servo (Payload Release)</li>
+                <li>• Telemetry: 433MHz 3DR Radio Telemetry Pair</li>
+                <li>• Power: 4S 5200mAh LiPo Battery</li>
+              </ul>
+            </div>
+
+            <div className="glass-panel p-6 rounded-2xl space-y-3 border-emerald-500/20">
+              <h3 className="font-bold text-emerald-400 text-sm font-mono border-b border-slate-800 pb-2">SOFTWARE & DATA PIPELINE</h3>
+              <ul className="text-xs text-gray-300 font-mono space-y-2">
+                <li>• Computer Vision: YOLOv8 Custom Human Classifier</li>
+                <li>• Autopilot Stack: PX4 Autonomous Flight Modes</li>
+                <li>• Dashboard: React 18 + Tailwind CSS + OpenStreetMap</li>
+                <li>• Telemetry Protocol: MAVLink v2.0</li>
+                <li>• Audio System: Android TTS + Acoustic Wave Detection</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Render
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
